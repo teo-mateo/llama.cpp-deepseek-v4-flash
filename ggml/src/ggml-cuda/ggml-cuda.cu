@@ -5043,14 +5043,14 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 return op->type == GGML_TYPE_F32 && (op->src[0]->ne[2]*op->src[0]->ne[3]) <= (1 << 15);
         case GGML_OP_CONCAT:
             {
-                // The CUDA concat kernel is F32-only (see ggml-cuda/concat.cu),
-                // but DSv4's graph builder calls ggml_concat with F16/quantized
-                // tensors at multiple sites (e.g., kv_comp accumulation in the
-                // per-token compressor decode loop). Reporting truthful support
-                // lets the scheduler fall back to CPU concat for non-F32, which
-                // does support all the dtypes DSv4 produces.
+                // CUDA concat now supports both F32 and F16 (templated kernels in
+                // ggml-cuda/concat.cu). DSv4's graph builder concat()s F16 tensors
+                // at multiple sites (e.g., kv_comp accumulation in the per-token
+                // compressor decode loop); having a CUDA path for F16 keeps those
+                // on-GPU instead of bouncing to CPU. Quantized inputs still fall
+                // back to CPU since the kernel only handles plain element types.
                 ggml_type src0_type = op->src[0]->type;
-                return src0_type == GGML_TYPE_F32;
+                return src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16;
             } break;
         case GGML_OP_CONV_TRANSPOSE_1D:
             {
