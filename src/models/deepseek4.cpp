@@ -1125,7 +1125,15 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                     ggml_tensor * topk = ggml_argsort_top_k(ctx0, index_scores, top_k);
                     cb(topk, "indexer_topk", il);
 
-                    ggml_tensor * comp_mask = dsv4_build_compressed_mask_from_topk(ctx0, index_scores, topk);
+                    // SANITY HACK (indexer-bypass): replace top-k mask with plain
+                    // causal mask to test whether bad indexer top-k is the cause
+                    // of middle-of-context retrieval hallucination.
+                    (void) topk;
+                    ggml_tensor * comp_mask = get_dsv4_inputs()->add_mask(ctx0,
+                            dsv4_mask_kind::COMPRESS_CAUSAL,
+                            n_comp, n_tokens,
+                            0, n_comp, 0, compress_ratio,
+                            "dsv4_attn_compress_mask");
                     cb(comp_mask, "dsv4_attn_compress_mask", il);
 
                     attn_mask = ggml_concat(ctx0, raw_mask, comp_mask, 0);
@@ -1291,7 +1299,13 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                             ggml_tensor * topk = ggml_argsort_top_k(ctx0, index_scores, top_k);
                             cb(topk, "indexer_topk", il);
 
-                            comp_mask = dsv4_build_compressed_mask_from_topk(ctx0, index_scores, topk);
+                            // SANITY HACK (indexer-bypass): see prefill site above.
+                            (void) topk;
+                            comp_mask = get_dsv4_inputs()->add_mask(ctx0,
+                                    dsv4_mask_kind::COMPRESS_CAUSAL,
+                                    n_comp_visible, n_tokens,
+                                    0, n_comp_visible, 0, compress_ratio,
+                                    "dsv4_attn_compress_mask");
                         }
                     } else {
                         comp_mask = get_dsv4_inputs()->add_mask(ctx0,
