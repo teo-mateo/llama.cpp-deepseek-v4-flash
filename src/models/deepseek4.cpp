@@ -827,6 +827,11 @@ static ggml_tensor * dsv4_build_indexer_scores_prefill(
             rope_cfg.n_ctx_orig, rope_cfg.freq_base, rope_cfg.freq_scale,
             rope_cfg.ext_factor, rope_cfg.attn_factor, rope_cfg.beta_fast, rope_cfg.beta_slow, false);
 
+    // Indexer QAT primitives: Hadamard rotation + FP4 simquant along last dim
+    // (matches reference: rotate_activation(q) → fp4_act_quant(q, 32, True)).
+    q = ggml_dsv4_hadamard_transform(ctx, q);
+    q = ggml_dsv4_fp4_simquant(ctx, q, /*block_size=*/ 32);
+
     ggml_tensor * k = ggml_permute(ctx, index_kv, 0, 2, 1, 3); // [head_dim, n_comp, 1]
     q = ggml_permute(ctx, q, 0, 2, 1, 3);                     // [head_dim, n_tokens, n_heads]
 
@@ -867,6 +872,10 @@ static ggml_tensor * dsv4_build_indexer_scores_decode(
             n_index_head_size, n_index_head, 1, n_rot, rope_type,
             rope_cfg.n_ctx_orig, rope_cfg.freq_base, rope_cfg.freq_scale,
             rope_cfg.ext_factor, rope_cfg.attn_factor, rope_cfg.beta_fast, rope_cfg.beta_slow, false);
+
+    // Indexer QAT primitives: Hadamard rotation + FP4 simquant along last dim.
+    q = ggml_dsv4_hadamard_transform(ctx, q);
+    q = ggml_dsv4_fp4_simquant(ctx, q, /*block_size=*/ 32);
 
     ggml_tensor * k = ggml_reshape_3d(ctx, index_kv, n_index_head_size, 1, n_comp);
     k = ggml_permute(ctx, k, 0, 2, 1, 3); // [head_dim, n_comp, 1]
@@ -1103,6 +1112,12 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                             layer.indexer_compressor_norm,
                             comp_pos,
                             hparams.indexer_head_size, n_rot, n_tokens, compress_ratio, rope_type, rope_cfg, norm_rms_eps);
+
+                    // Indexer compressor (rotate=True in reference): Hadamard
+                    // rotation + FP4 simquant on the compressed KV before it
+                    // is stored or used as indexer keys.
+                    index_kv = ggml_dsv4_hadamard_transform(ctx0, index_kv);
+                    index_kv = ggml_dsv4_fp4_simquant(ctx0, index_kv, /*block_size=*/ 32);
                     cb(index_kv, "indexer_KVcompress", il);
 
                     store_index_cache_rows(index_kv, 0, n_comp);
@@ -1245,6 +1260,11 @@ llm_build_deepseek4::llm_build_deepseek4(const llama_model & model, const llm_gr
                         dsv4_store_state_segment(ctx0, gf, index_dec.score_state, inp_rs->mctx->get_s_l(il), state_size, inp_rs->head, attn_state_layout.elems);
 
                         if (index_dec.kv_comp != nullptr) {
+                            // Indexer compressor (rotate=True): apply Hadamard
+                            // + FP4 simquant before the cache store so cached
+                            // K matches the H+FP4'd indexer Q at score time.
+                            index_dec.kv_comp = ggml_dsv4_hadamard_transform(ctx0, index_dec.kv_comp);
+                            index_dec.kv_comp = ggml_dsv4_fp4_simquant(ctx0, index_dec.kv_comp, /*block_size=*/ 32);
                             store_index_cache_rows(index_dec.kv_comp, n_comp_before, n_comp_visible - n_comp_before);
                         }
 

@@ -1063,6 +1063,8 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "DSV4_HC_EXPAND",
     "DSV4_FP8_KV_QUANTIZE",
     "DSV4_ROPE_TAIL",
+    "DSV4_HADAMARD_TRANSFORM",
+    "DSV4_FP4_SIMQUANT",
 
     "UNARY",
 
@@ -1080,7 +1082,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 103, "GGML_OP_COUNT != 103");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1178,6 +1180,8 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "dsv4_hc_expand(x)",
     "dsv4_fp8_kv_quantize(x)",
     "dsv4_rope_tail(x)",
+    "dsv4_hadamard_transform(x)",
+    "dsv4_fp4_simquant(x)",
 
     "unary(x)",
 
@@ -1195,7 +1199,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 103, "GGML_OP_COUNT != 103");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6340,6 +6344,44 @@ struct ggml_tensor * ggml_dsv4_fp8_kv_quantize(
     ggml_set_op_params_i32(result, 0, n_rot);
 
     result->op     = GGML_OP_DSV4_FP8_KV_QUANTIZE;
+    result->src[0] = a;
+
+    return result;
+}
+
+// ggml_dsv4_hadamard_transform
+
+struct ggml_tensor * ggml_dsv4_hadamard_transform(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(a->ne[0] > 0);
+    // require power-of-two last dim
+    GGML_ASSERT((a->ne[0] & (a->ne[0] - 1)) == 0);
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    result->op     = GGML_OP_DSV4_HADAMARD_TRANSFORM;
+    result->src[0] = a;
+
+    return result;
+}
+
+// ggml_dsv4_fp4_simquant
+
+struct ggml_tensor * ggml_dsv4_fp4_simquant(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                   block_size) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(block_size > 0);
+    GGML_ASSERT(a->ne[0] % block_size == 0);
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    ggml_set_op_params_i32(result, 0, block_size);
+
+    result->op     = GGML_OP_DSV4_FP4_SIMQUANT;
     result->src[0] = a;
 
     return result;

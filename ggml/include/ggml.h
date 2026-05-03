@@ -566,6 +566,8 @@ extern "C" {
         GGML_OP_DSV4_HC_EXPAND,
         GGML_OP_DSV4_FP8_KV_QUANTIZE,
         GGML_OP_DSV4_ROPE_TAIL,
+        GGML_OP_DSV4_HADAMARD_TRANSFORM,
+        GGML_OP_DSV4_FP4_SIMQUANT,
 
         GGML_OP_UNARY,
 
@@ -2579,6 +2581,23 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   n_rot);
+
+    // DeepSeek V4 indexer Walsh-Hadamard transform along last dim.
+    // Last dim must be a power of two. Output is scaled by 1/sqrt(ne[0]) so
+    // (H x) . (H y) == x . y exactly modulo rounding (orthonormal).
+    // Mirrors fast_hadamard_transform.hadamard_transform(x, scale=ne[0]^-0.5).
+    GGML_API struct ggml_tensor * ggml_dsv4_hadamard_transform(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    // DeepSeek V4 indexer FP4 (E2M1) blockwise simulated-quantization.
+    // Per `block_size`-element block along ne[0]: scale by max-abs, round to
+    // nearest E2M1 code, dequantize, write back. ne[0] must be a multiple of
+    // block_size. Mirrors fp4_act_quant(x, block_size, simulation=True).
+    GGML_API struct ggml_tensor * ggml_dsv4_fp4_simquant(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   block_size);
 
     // DeepSeek V4 partial RoPE helper.
     // Leaves the non-RoPE prefix unchanged and applies RoPE to the tail,

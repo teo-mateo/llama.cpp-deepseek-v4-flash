@@ -962,6 +962,8 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(co
             case GGML_OP_DSV4_HC_EXPAND:
             case GGML_OP_DSV4_FP8_KV_QUANTIZE:
             case GGML_OP_DSV4_ROPE_TAIL:
+            case GGML_OP_DSV4_HADAMARD_TRANSFORM:
+            case GGML_OP_DSV4_FP4_SIMQUANT:
             case GGML_OP_UNARY: {
                 split_state = handle_generic(src_ss, /*scalar_only =*/ false);
             } break;

@@ -11278,6 +11278,144 @@ void ggml_compute_forward_dsv4_fp8_kv_quantize(
     }
 }
 
+// ggml_compute_forward_dsv4_hadamard_transform
+//
+// In-place Walsh-Hadamard butterfly along the last dim, scaled by 1/sqrt(d)
+// so the transform is orthonormal: (H x) . (H y) == x . y modulo rounding.
+// Mirrors fast_hadamard_transform.hadamard_transform(x, scale=d**-0.5) used
+// by the DeepSeek V4 indexer (rotate_activation in the reference).
+
+void ggml_compute_forward_dsv4_hadamard_transform(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(dst->nb[0]  == sizeof(float));
+
+    const int64_t d = src0->ne[0];
+    GGML_ASSERT(d > 0);
+    GGML_ASSERT((d & (d - 1)) == 0);
+
+    const float inv_sqrt_d = 1.0f / std::sqrt(float(d));
+
+    const int64_t n_rows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const int64_t row_start = (n_rows * params->ith) / params->nth;
+    const int64_t row_end   = (n_rows * (params->ith + 1)) / params->nth;
+
+    for (int64_t row = row_start; row < row_end; ++row) {
+        const int64_t i1 = row % src0->ne[1];
+        const int64_t i2 = (row / src0->ne[1]) % src0->ne[2];
+        const int64_t i3 = row / (src0->ne[1] * src0->ne[2]);
+
+        const float * src_row = (const float *) ((const char *) src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3]);
+        float       * dst_row = (      float *) ((      char *) dst->data  + i1*dst->nb[1]  + i2*dst->nb[2]  + i3*dst->nb[3]);
+
+        if (dst_row != src_row) {
+            memcpy(dst_row, src_row, d * sizeof(float));
+        }
+
+        for (int64_t h = 1; h < d; h <<= 1) {
+            for (int64_t i = 0; i < d; i += h << 1) {
+                for (int64_t j = 0; j < h; ++j) {
+                    const float a = dst_row[i + j];
+                    const float b = dst_row[i + j + h];
+                    dst_row[i + j]     = a + b;
+                    dst_row[i + j + h] = a - b;
+                }
+            }
+        }
+
+        for (int64_t i = 0; i < d; ++i) {
+            dst_row[i] *= inv_sqrt_d;
+        }
+    }
+}
+
+// ggml_compute_forward_dsv4_fp4_simquant
+//
+// Blockwise FP4 (E2M1) fake-quantization along the last dim.
+// Per `block_size`-element block:
+//   amax  = max |x_i|
+//   scale = amax / FP4_E2M1_MAX        (with floor 1e-12 to avoid /0)
+//   x_q   = round_to_e2m1(x_i / scale) * scale
+// Mirrors fp4_act_quant(x, block_size, simulation=True) used by the DSv4
+// indexer Q and indexer compressor KV (QAT primitive).
+
+static const float ggml_dsv4_fp4_e2m1_codes[8] = {
+    0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f,
+};
+
+static float ggml_dsv4_fp4_e2m1_dequant(float x) {
+    const float sign = x < 0.0f ? -1.0f : 1.0f;
+    const float ax   = std::fabs(x);
+
+    int   best = 0;
+    float best_diff = ax;
+    for (int i = 1; i < 8; ++i) {
+        const float diff = std::fabs(ax - ggml_dsv4_fp4_e2m1_codes[i]);
+        // ties-to-even on mantissa LSB (codes with index even = mantissa 0).
+        if (diff < best_diff || (diff == best_diff && (i & 1) == 0 && (best & 1) != 0)) {
+            best = i;
+            best_diff = diff;
+        }
+    }
+
+    return sign * ggml_dsv4_fp4_e2m1_codes[best];
+}
+
+void ggml_compute_forward_dsv4_fp4_simquant(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(dst->nb[0]  == sizeof(float));
+
+    const int64_t block_size = ggml_get_op_params_i32(dst, 0);
+    GGML_ASSERT(block_size > 0);
+
+    const int64_t d = src0->ne[0];
+    GGML_ASSERT(d % block_size == 0);
+
+    const float fp4_max     = 6.0f;
+    const float scale_floor = 1.0e-12f;
+
+    const int64_t n_rows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const int64_t row_start = (n_rows * params->ith) / params->nth;
+    const int64_t row_end   = (n_rows * (params->ith + 1)) / params->nth;
+
+    for (int64_t row = row_start; row < row_end; ++row) {
+        const int64_t i1 = row % src0->ne[1];
+        const int64_t i2 = (row / src0->ne[1]) % src0->ne[2];
+        const int64_t i3 = row / (src0->ne[1] * src0->ne[2]);
+
+        const float * src_row = (const float *) ((const char *) src0->data + i1*src0->nb[1] + i2*src0->nb[2] + i3*src0->nb[3]);
+        float       * dst_row = (      float *) ((      char *) dst->data  + i1*dst->nb[1]  + i2*dst->nb[2]  + i3*dst->nb[3]);
+
+        for (int64_t off = 0; off < d; off += block_size) {
+            float amax = 0.0f;
+            for (int64_t i = 0; i < block_size; ++i) {
+                amax = std::max(amax, std::fabs(src_row[off + i]));
+            }
+
+            const float scale     = std::max(amax / fp4_max, scale_floor);
+            const float inv_scale = 1.0f / scale;
+
+            for (int64_t i = 0; i < block_size; ++i) {
+                const float v_scaled = src_row[off + i] * inv_scale;
+                dst_row[off + i] = ggml_dsv4_fp4_e2m1_dequant(v_scaled) * scale;
+            }
+        }
+    }
+}
+
 // ggml_compute_forward_map_custom1
 
 void ggml_compute_forward_map_custom1(

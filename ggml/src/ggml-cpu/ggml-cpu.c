@@ -2057,6 +2057,14 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_dsv4_rope_tail(params, tensor);
             } break;
+        case GGML_OP_DSV4_HADAMARD_TRANSFORM:
+            {
+                ggml_compute_forward_dsv4_hadamard_transform(params, tensor);
+            } break;
+        case GGML_OP_DSV4_FP4_SIMQUANT:
+            {
+                ggml_compute_forward_dsv4_fp4_simquant(params, tensor);
+            } break;
         case GGML_OP_MAP_CUSTOM1:
             {
                 ggml_compute_forward_map_custom1(params, tensor);
@@ -2242,6 +2250,8 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_DSV4_HC_EXPAND:
         case GGML_OP_DSV4_FP8_KV_QUANTIZE:
         case GGML_OP_DSV4_ROPE_TAIL:
+        case GGML_OP_DSV4_HADAMARD_TRANSFORM:
+        case GGML_OP_DSV4_FP4_SIMQUANT:
             {
                 n_tasks = n_threads;
             } break;
