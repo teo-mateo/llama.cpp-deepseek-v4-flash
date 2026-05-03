@@ -11384,8 +11384,10 @@ void ggml_compute_forward_dsv4_fp4_simquant(
     const int64_t d = src0->ne[0];
     GGML_ASSERT(d % block_size == 0);
 
-    const float fp4_max     = 6.0f;
-    const float scale_floor = 1.0e-12f;
+    const float fp4_max = 6.0f;
+    // Match reference fast_round_scale: floor amax at 6 * 2^-126 so the
+    // minimum power-of-two scale is 2^-126 (subnormal-resistant).
+    const float amax_floor = fp4_max * std::ldexp(1.0f, -126);
 
     const int64_t n_rows = src0->ne[1] * src0->ne[2] * src0->ne[3];
     const int64_t row_start = (n_rows * params->ith) / params->nth;
@@ -11404,12 +11406,17 @@ void ggml_compute_forward_dsv4_fp4_simquant(
             for (int64_t i = 0; i < block_size; ++i) {
                 amax = std::max(amax, std::fabs(src_row[off + i]));
             }
+            amax = std::max(amax, amax_floor);
 
-            const float scale     = std::max(amax / fp4_max, scale_floor);
+            // Power-of-two scale: scale = 2^ceil(log2(amax / fp4_max))
+            // Matches reference fast_round_scale(amax, 1/6) — coarser
+            // E8M0-style scale grid that QAT was trained against.
+            const float scale     = std::ldexp(1.0f, (int) std::ceil(std::log2(amax / fp4_max)));
             const float inv_scale = 1.0f / scale;
 
             for (int64_t i = 0; i < block_size; ++i) {
-                const float v_scaled = src_row[off + i] * inv_scale;
+                // Clamp scaled value to [-fp4_max, fp4_max] to match reference.
+                const float v_scaled = std::clamp(src_row[off + i] * inv_scale, -fp4_max, fp4_max);
                 dst_row[off + i] = ggml_dsv4_fp4_e2m1_dequant(v_scaled) * scale;
             }
         }
