@@ -2096,7 +2096,13 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         // count is much smaller than the number of GGML objects allocated while
         // building those graphs, so reserve a larger metadata arena than the
         // generic tensor-count heuristic would provide.
-        return std::max<uint32_t>(524288u, n_tokens * 192 + 64u * model.n_tensors());
+        //
+        // Floor bumped 524288u -> 1048576u: original floor was binding for
+        // typical n_tensors (~700 for this MoE model with packed expert tensors)
+        // and prefill at -ub >= 128 overflowed by exactly 1 tensor in the
+        // dsv4_build_compressor_decode_chunk per-token loop (deepseek4.cpp:776).
+        // Multiplier 64u -> 96u: extra headroom for the n_tensors-binding regime.
+        return std::max<uint32_t>(1048576u, n_tokens * 192 + 96u * model.n_tensors());
     }
     uint32_t res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
     for (const auto & lora : model.loras) {
